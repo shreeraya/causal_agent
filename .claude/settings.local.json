@@ -16,7 +16,10 @@
       "PowerShell($conn = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue; if \\($conn\\) { $conn | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -Confirm:$false }; \"killed\" } else { \"port free\" })",
       "PowerShell(git --version; git config --global user.name; git config --global user.email; \\(Get-Command gh -ErrorAction SilentlyContinue\\)?.Source ?? \"gh CLI not installed\")",
       "PowerShell(git ls-remote https://github.com/shreedharraikar2005 2>&1)",
-      "PowerShell(cmd /c \"git credential-manager --version\" 2>$null)"
+      "PowerShell(cmd /c \"git credential-manager --version\" 2>$null)",
+      "PowerShell(git -C \"C:\\\\Users\\\\shrid\\\\Documents\\\\Data Science\\\\Causal_Agent\" remote -v)",
+      "PowerShell(git -C \"C:\\\\Users\\\\shrid\\\\Documents\\\\Data Science\\\\Causal_Agent\" status -sb)",
+      "PowerShell(git -C \"C:\\\\Users\\\\shrid\\\\Documents\\\\Data Science\\\\Causal_Agent\" ls-remote origin main)"
     ]
   }
 }

@@ -30,11 +30,23 @@ Relationships:
 Run:  python seed_supply_chain.py
 """
 
+import os
 import random
+from pathlib import Path
 from neo4j import GraphDatabase
 
-URI = "bolt://localhost:7687"
-AUTH = ("neo4j", "supplychain123")
+# connection from .env / environment, defaulting to the local instance
+env_file = Path(__file__).parent / ".env"
+if env_file.exists():
+    for line in env_file.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, _, v = line.partition("=")
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
+AUTH = (os.environ.get("NEO4J_USER", "neo4j"),
+        os.environ.get("NEO4J_PASSWORD", "supplychain123"))
 
 random.seed(42)
 
