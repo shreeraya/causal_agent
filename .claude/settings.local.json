@@ -19,7 +19,8 @@
       "PowerShell(cmd /c \"git credential-manager --version\" 2>$null)",
       "PowerShell(git -C \"C:\\\\Users\\\\shrid\\\\Documents\\\\Data Science\\\\Causal_Agent\" remote -v)",
       "PowerShell(git -C \"C:\\\\Users\\\\shrid\\\\Documents\\\\Data Science\\\\Causal_Agent\" status -sb)",
-      "PowerShell(git -C \"C:\\\\Users\\\\shrid\\\\Documents\\\\Data Science\\\\Causal_Agent\" ls-remote origin main)"
+      "PowerShell(git -C \"C:\\\\Users\\\\shrid\\\\Documents\\\\Data Science\\\\Causal_Agent\" ls-remote origin main)",
+      "PowerShell(python \"C:\\\\Users\\\\shrid\\\\Documents\\\\Data Science\\\\Causal_Agent\\\\add_weekly_snapshots.py\")"
     ]
   }
 }

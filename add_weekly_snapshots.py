@@ -39,7 +39,7 @@ if env_file.exists():
             os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
 
 URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
-AUTH = (os.environ.get("NEO4J_USER", "neo4j"),
+AUTH = (os.environ.get("NEO4J_USERNAME") or os.environ.get("NEO4J_USER", "neo4j"),
         os.environ.get("NEO4J_PASSWORD", "supplychain123"))
 
 random.seed(42)
