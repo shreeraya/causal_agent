@@ -350,6 +350,28 @@ def chat(req: ChatRequest, request: Request):
         return {"reply": f"**Error:** {type(e).__name__}: {e}", "trace": trace}
 
 
+_stats_cache = {"t": 0.0, "data": None}
+
+
+@app.get("/api/stats")
+def stats():
+    """Live node/relationship counts for the Graph tab (cached 10 min)."""
+    if _stats_cache["data"] and time.time() - _stats_cache["t"] < 600:
+        return _stats_cache["data"]
+    try:
+        with driver.session() as s:
+            nodes = s.execute_read(lambda tx: [r.data() for r in tx.run(
+                "MATCH (n) WITH labels(n)[0] AS label RETURN label, count(*) AS c ORDER BY c DESC")])
+            rels = s.execute_read(lambda tx: [r.data() for r in tx.run(
+                "MATCH ()-[r]->() RETURN type(r) AS type, count(*) AS c ORDER BY c DESC")])
+        data = {"nodes": nodes, "rels": rels,
+                "db": "Neo4j Aura" if "databases.neo4j.io" in NEO4J_URI else "local Neo4j"}
+        _stats_cache.update(t=time.time(), data=data)
+        return data
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
 @app.get("/api/health")
 def health():
     try:
