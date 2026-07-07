@@ -14,10 +14,12 @@ Run:  uvicorn app:app --port 8000        (needs OPENAI_API_KEY in env or .env)
 import os
 import re
 import json
+import time
+from collections import defaultdict, deque
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from neo4j import GraphDatabase
@@ -42,6 +44,29 @@ NEO4J_AUTH = (os.environ.get("NEO4J_USERNAME") or os.environ.get("NEO4J_USER", "
               os.environ.get("NEO4J_PASSWORD", "supplychain123"))
 MAX_TOOL_ROUNDS = 12
 MAX_ROWS = 60
+
+# --- demo hardening: shared access code + per-IP rate limit
+DEMO_PASSCODE = os.environ.get("DEMO_PASSCODE", "")   # empty = gate disabled (local dev)
+RATE_LIMIT_PER_MIN = 8         # chat requests per IP per minute
+MAX_MESSAGE_CHARS = 2000
+MAX_HISTORY_TURNS = 30
+_request_log: dict[str, deque] = defaultdict(deque)
+
+
+def client_ip(request: Request) -> str:
+    # behind a Cloudflare tunnel the real client IP arrives in this header
+    return request.headers.get("CF-Connecting-IP") or (request.client.host if request.client else "?")
+
+
+def rate_limited(ip: str) -> bool:
+    now = time.time()
+    q = _request_log[ip]
+    while q and now - q[0] > 60:
+        q.popleft()
+    if len(q) >= RATE_LIMIT_PER_MIN:
+        return True
+    q.append(now)
+    return False
 
 driver = GraphDatabase.driver(NEO4J_URI, auth=NEO4J_AUTH)
 client = openai.OpenAI() if os.environ.get("OPENAI_API_KEY") else None
@@ -253,7 +278,16 @@ class ChatRequest(BaseModel):
 
 
 @app.post("/api/chat")
-def chat(req: ChatRequest):
+def chat(req: ChatRequest, request: Request):
+    if DEMO_PASSCODE and request.headers.get("X-Passcode", "") != DEMO_PASSCODE:
+        return JSONResponse(status_code=401,
+                            content={"reply": "**Invalid or missing access code.**", "trace": []})
+    if rate_limited(client_ip(request)):
+        return JSONResponse(status_code=429,
+                            content={"reply": "**Slow down** — limit is a few questions per minute.", "trace": []})
+    if len(req.messages) > MAX_HISTORY_TURNS or any(len(t.content) > MAX_MESSAGE_CHARS for t in req.messages):
+        return JSONResponse(status_code=413,
+                            content={"reply": "**Message or conversation too long.** Refresh to start over.", "trace": []})
     if client is None:
         return {
             "reply": ("**No API key configured.** Create a file named `.env` next to "

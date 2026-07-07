@@ -68,6 +68,9 @@
 <body>
 <header>
   <h1>&#128230; Supply Chain Causal Agent</h1>
+  <input id="passcode" type="password" placeholder="access code" autocomplete="off"
+         style="margin-left:16px; background:var(--panel2); border:1px solid var(--border);
+                border-radius:8px; color:var(--text); padding:5px 10px; font-size:12.5px; width:120px;">
   <span class="status" id="status"><span class="dot" style="background:#666"></span>checking…</span>
 </header>
 
@@ -96,7 +99,11 @@
 const chat = document.getElementById("chat");
 const input = document.getElementById("input");
 const sendBtn = document.getElementById("send");
+const passcodeEl = document.getElementById("passcode");
 const history = [];   // {role, content}
+
+passcodeEl.value = localStorage.getItem("demo_passcode") || "";
+passcodeEl.addEventListener("change", () => localStorage.setItem("demo_passcode", passcodeEl.value));
 
 fetch("/api/health").then(r => r.json()).then(h => {
   const s = document.getElementById("status");
@@ -155,13 +162,18 @@ async function send(text) {
   try {
     const resp = await fetch("/api/chat", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-Passcode": passcodeEl.value },
       body: JSON.stringify({ messages: history }),
     });
     const data = await resp.json();
     thinking.remove();
     addBot(data.reply, data.trace);
-    history.push({ role: "assistant", content: data.reply });
+    if (resp.status === 401) {
+      history.pop();  // don't poison history with the rejected turn
+      passcodeEl.focus();
+    } else {
+      history.push({ role: "assistant", content: data.reply });
+    }
   } catch (e) {
     thinking.remove();
     addBot("**Request failed:** " + e.message, []);

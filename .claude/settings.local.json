@@ -20,7 +20,13 @@
       "PowerShell(git -C \"C:\\\\Users\\\\shrid\\\\Documents\\\\Data Science\\\\Causal_Agent\" remote -v)",
       "PowerShell(git -C \"C:\\\\Users\\\\shrid\\\\Documents\\\\Data Science\\\\Causal_Agent\" status -sb)",
       "PowerShell(git -C \"C:\\\\Users\\\\shrid\\\\Documents\\\\Data Science\\\\Causal_Agent\" ls-remote origin main)",
-      "PowerShell(python \"C:\\\\Users\\\\shrid\\\\Documents\\\\Data Science\\\\Causal_Agent\\\\add_weekly_snapshots.py\")"
+      "PowerShell(python \"C:\\\\Users\\\\shrid\\\\Documents\\\\Data Science\\\\Causal_Agent\\\\add_weekly_snapshots.py\")",
+      "mcp__visualize__read_me",
+      "mcp__visualize__show_widget",
+      "PowerShell(winget install --id Cloudflare.cloudflared --accept-source-agreements --accept-package-agreements 2>&1)",
+      "PowerShell($env:Path = [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"User\"\\); cloudflared --version)",
+      "PowerShell($code = -join \\(\\(48..57\\) + \\(97..122\\) | Get-Random -Count 10 | ForEach-Object {[char]$_}\\); Add-Content \"C:\\\\Users\\\\shrid\\\\Documents\\\\Data Science\\\\Causal_Agent\\\\.env\" \"`nDEMO_PASSCODE=$code\"; \"passcode set: $code\")",
+      "PowerShell($env:Path = [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"User\"\\); cloudflared tunnel --url http://localhost:8000 2>&1 | Tee-Object -FilePath \"$env:TEMP\\\\cloudflared_demo.log\")"
     ]
   }
 }
