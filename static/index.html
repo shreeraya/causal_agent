@@ -473,7 +473,14 @@ async function send(text) {
       history.pop();
       passcodeEl.focus();
     } else {
-      history.push({ role: "assistant", content: data.reply });
+      // keep the successful Cypher in history (not displayed) so the agent
+      // can extend its own working queries on follow-up questions
+      let hist = data.reply;
+      const good = (data.trace || []).filter(t => !t.error && t.row_count > 0).slice(-3);
+      if (good.length) {
+        hist += "\n\n[Cypher used: " + good.map(t => t.query.replace(/\s+/g, " ").slice(0, 300)).join(" ||| ") + "]";
+      }
+      history.push({ role: "assistant", content: hist.slice(0, 7000) });
     }
   } catch (e) {
     thinking.remove();

@@ -167,6 +167,21 @@ Lead-time path (lead_time_days lives on the SHIPS_TO relationships):
     ORDER BY total_days LIMIT 1
 
 Rules:
+- WeeklySnapshot.week_start and DisruptionEvent.start_date are Cypher DATE
+  values. A string comparison like {week_start: '2026-06-29'} NEVER matches —
+  use week_start = date('2026-06-29'), or better, filter on week_index
+  (integer 0-51). "Last week" / the most recent week is week_index 51.
+- Relationship directions are strict — copy them exactly from the ontology
+  above: (Store|DC)-[:STOCKS]->(Product), (Store)-[:SELLS]->(Product),
+  (Store|DC)-[:HAS_SNAPSHOT]->(WeeklySnapshot)-[:FOR_PRODUCT]->(Product).
+  A reversed direction silently returns 0 rows.
+- If a query unexpectedly returns 0 rows, do NOT conclude the data is absent.
+  First suspect your own query: check relationship directions, property names,
+  and value casing, then retry. Never contradict a number you reported earlier
+  in this conversation because a new query returned 0 rows — fix the query.
+- Earlier assistant messages may include the Cypher used for those answers
+  (in a [Cypher used: ...] block). For follow-up questions, extend that
+  working query instead of writing a new pattern from scratch.
 - String properties are case-sensitive ('Sugar', not 'sugar'). Use the exact
   entity names from the vocabulary below. If a name lookup returns 0 rows,
   retry with WHERE toLower(x.name) CONTAINS toLower('...') before concluding
@@ -285,7 +300,9 @@ def chat(req: ChatRequest, request: Request):
     if rate_limited(client_ip(request)):
         return JSONResponse(status_code=429,
                             content={"reply": "**Slow down** — limit is a few questions per minute.", "trace": []})
-    if len(req.messages) > MAX_HISTORY_TURNS or any(len(t.content) > MAX_MESSAGE_CHARS for t in req.messages):
+    if len(req.messages) > MAX_HISTORY_TURNS or any(
+            len(t.content) > (MAX_MESSAGE_CHARS if t.role == "user" else MAX_MESSAGE_CHARS * 4)
+            for t in req.messages):
         return JSONResponse(status_code=413,
                             content={"reply": "**Message or conversation too long.** Refresh to start over.", "trace": []})
     if client is None:
