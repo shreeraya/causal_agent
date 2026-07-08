@@ -6,6 +6,7 @@
 # Note: the tunnel cannot survive laptop sleep. For demos, set your power plan
 # to not sleep on AC power, or ask for the named-tunnel setup (stable URL).
 
+$Host.UI.RawUI.WindowTitle = "causal-agent-demo"   # stop_demo.bat finds this window by title
 $root = $PSScriptRoot
 $urlFile = Join-Path $root "demo_url.txt"
 $cloudflared = "C:\Program Files (x86)\cloudflared\cloudflared.exe"
