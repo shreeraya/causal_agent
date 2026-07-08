@@ -10,7 +10,7 @@ knowledge-graph foundation for a causal question-answering agent.
 | Browser UI | http://localhost:7474 |
 | Bolt URI | `bolt://localhost:7687` |
 | Username | `neo4j` |
-| Password | `supplychain123` |
+| Password | set at install time — keep it in `.env` (`NEO4J_PASSWORD`) |
 | Install dir | `C:\Users\shrid\neo4j\neo4j-community-5.26.0` |
 
 ## Start / stop

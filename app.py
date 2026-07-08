@@ -41,7 +41,7 @@ import openai  # noqa: E402  (import after .env load so the client sees the key)
 MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_AUTH = (os.environ.get("NEO4J_USERNAME") or os.environ.get("NEO4J_USER", "neo4j"),
-              os.environ.get("NEO4J_PASSWORD", "supplychain123"))
+              os.environ.get("NEO4J_PASSWORD", ""))  # set NEO4J_PASSWORD in .env
 MAX_TOOL_ROUNDS = 12
 MAX_ROWS = 60
 
