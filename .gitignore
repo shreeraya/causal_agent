@@ -2,3 +2,4 @@
 __pycache__/
 Neo4j-*.txt
 demo_url.txt
+.claude/settings.local.json
