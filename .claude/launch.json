@@ -6,6 +6,12 @@
       "runtimeExecutable": "python",
       "runtimeArgs": ["-m", "uvicorn", "app:app", "--port", "8000"],
       "port": 8000
+    },
+    {
+      "name": "causal-agent-preview",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "uvicorn", "app:app", "--port", "8010"],
+      "port": 8010
     }
   ]
 }
