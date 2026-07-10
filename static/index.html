@@ -138,17 +138,20 @@
 <section class="tab active" id="tab-chat">
   <div id="chat">
     <div class="msg bot"><div class="md">
-      <p>Hi! I answer <b>factual</b> and <b>causal</b> questions about a multi-echelon supply chain
-      (8 suppliers &rarr; 3 plants &rarr; 8 DCs &rarr; 20 stores, 120 SKUs, 52 weeks of history).
+      <p>Hi! I answer <b>factual</b>, <b>causal</b>, <b>what-if</b>, <b>counterfactual</b>, and
+      <b>future-risk</b> questions about a multi-echelon supply chain
+      (8 suppliers &rarr; 3 plants &rarr; 2 central + 6 regional DCs, 120 SKUs).
+      I see 52 weeks of history and a 25-week projected inventory plan — today is 2026-07-06.
       Ask me anything, or try a suggestion below. The other tabs explain how I work.</p>
     </div></div>
   </div>
   <div id="suggestions">
-    <button>Which SKUs are most exposed to the sugar shortage?</button>
-    <button>What is the shortest lead-time route from GlobalSweet Ltd to the Boston store?</button>
-    <button>Did the sugar shortage actually cause stockouts in stores? How big was the effect?</button>
+    <button>Which SKUs are projected to stock out in the next two months, and where?</button>
+    <button>Is SKU-0070 at risk of stocking out? Why?</button>
     <button>What is the causal effect of promotions on units sold?</button>
-    <button>Why did western stores receive less inventory in late June 2026?</button>
+    <button>What would happen to stockouts in the next 8 weeks if the PetroPolymers fire were resolved today?</button>
+    <button>Which SKUs will the September plant maintenance put at risk?</button>
+    <button>Did the sugar shortage actually cause stockouts? How big was the effect?</button>
   </div>
   <div id="inputbar">
     <textarea id="input" rows="1" placeholder="Ask a factual or causal question…"></textarea>
@@ -163,29 +166,30 @@
 
   <div class="cards">
     <div class="card"><h4>Factual questions</h4>
-      <p>"How much inventory of SKU-0042 is at the Northeast RDC?" &middot; "Which supplier provides our packaging film?" &middot; "What's the lead time from GlobalSweet to Boston?" — answerable by lookups in a database or dashboard.</p></div>
+      <p>"How much inventory of SKU-0042 is at the Northeast RDC?" &middot; "Which supplier provides our packaging film?" &middot; "What's the lead time from GlobalSweet to the Northeast RDC?" — answerable by lookups in a database or dashboard.</p></div>
     <div class="card"><h4>Causal questions</h4>
-      <p>"<b>Why</b> did stockouts spike in western stores?" &middot; "What was the <b>effect</b> of the promotion on sales?" &middot; "Which SKUs are <b>at risk if</b> a supplier fails?" — these need structural knowledge and counterfactual reasoning, not lookups.</p></div>
+      <p>"<b>Why</b> did stockouts spike in the western network?" &middot; "What was the <b>effect</b> of the promotion on sales?" &middot; "<b>Will</b> SKU-0070 stock out next month — and <b>why</b>?" &middot; "Would that stockout have happened <b>if</b> the supplier fire hadn't occurred?" — these need structural knowledge, projection, and counterfactual reasoning, not lookups.</p></div>
   </div>
 
   <h3>Why existing tools fall short</h3>
   <ul>
     <li><b>Dashboards & BI</b> show correlations in aggregates. They can show stockouts rose, but not whether a port delay, a promotion, or seasonality caused it.</li>
-    <li><b>Relational databases</b> struggle with the question "what does this event touch?" — tracing a supplier failure through bills of materials to at-risk store-SKUs is a multi-hop path query, which is exactly what graphs are for.</li>
+    <li><b>Relational databases</b> struggle with the question "what does this event touch?" — tracing a supplier failure through bills of materials to at-risk DC-SKUs is a multi-hop path query, which is exactly what graphs are for.</li>
     <li><b>LLMs alone</b> speak the business language but hallucinate numbers and have no access to your network structure or history.</li>
   </ul>
 
   <h3>The hypothesis this demo tests</h3>
-  <p>Combining four ingredients yields a system that answers <i>both</i> question classes with evidence:</p>
+  <p>Combining five ingredients yields a system that answers <i>all</i> of these question classes with evidence:</p>
   <ol>
     <li><b>A knowledge graph</b> (Neo4j) that stores the supply chain's structure — who supplies what, what's made from what, what ships where — so causal <i>pathways</i> are first-class, traversable data.</li>
     <li><b>An ontology</b> — a formal, shared vocabulary of entity types and relationships — that lets a language model translate business questions into precise graph queries without guessing.</li>
-    <li><b>Time-series facts</b> (weekly snapshots) that provide the before/after variation causal inference needs.</li>
-    <li><b>An LLM agent</b> that classifies the question, plans queries, and explains the answer — grounded so every number comes from the graph.</li>
+    <li><b>Time-series facts</b> — 52 weeks of history plus a 25-week projected inventory plan (from demand forecasts and inventory-balance equations) so <i>future</i> stockout risk is queryable, not just past performance.</li>
+    <li><b>A causal engine</b> (DoWhy) — backdoor-adjusted effect estimation with refutation tests, what-if simulation, and true counterfactuals over a structural causal model fitted to the snapshots.</li>
+    <li><b>An LLM agent</b> that classifies the question, plans queries and causal analyses, and explains the answer — grounded so every number comes from a tool result.</li>
   </ol>
 
   <div class="callout">
-    <b>Why synthetic data?</b> The dataset is a simulated consumer-goods network where the true causal effects are <i>known by construction</i> — promotions lift demand &times;1.4, disruptions cut supply with a one-week lag per echelon. That means the agent's causal answers can be scored against ground truth, which is impossible with real-world data. The methodology transfers unchanged to real data.
+    <b>Why synthetic data?</b> The dataset is a simulated consumer-goods network where the true causal effects are <i>known by construction</i> — promotions lift demand &times;1.4, disruptions cut supply with a one-week lag per echelon, three SKUs run ~25% above forecast. That means the agent's causal answers can be scored against ground truth, which is impossible with real-world data. The methodology transfers unchanged to real data.
   </div>
 </div></section>
 
@@ -215,28 +219,32 @@
 
     <line x1="610" y1="80" x2="680" y2="80"/><path class="edge" d="M674,75 L682,80 L674,85"/>
     <line x1="680" y1="100" x2="610" y2="100"/><path class="edge" d="M616,95 L608,100 L616,105"/>
-    <text class="s" x="645" y="68" text-anchor="middle">Cypher</text>
-    <text class="s" x="645" y="118" text-anchor="middle">rows (JSON)</text>
+    <text class="s" x="645" y="68" text-anchor="middle">tool calls</text>
+    <text class="s" x="645" y="118" text-anchor="middle">results (JSON)</text>
 
-    <rect class="b" x="685" y="50" width="185" height="80"/>
-    <text x="777" y="80" text-anchor="middle">run_cypher tool</text>
-    <text class="s" x="777" y="98" text-anchor="middle">read-only guard &middot; 60-row cap</text>
-    <text class="s" x="777" y="114" text-anchor="middle">&rarr; Neo4j Aura (cloud graph)</text>
+    <rect class="b" x="685" y="30" width="185" height="60"/>
+    <text x="777" y="55" text-anchor="middle">run_cypher</text>
+    <text class="s" x="777" y="72" text-anchor="middle">read-only &rarr; Neo4j Aura</text>
+
+    <rect class="b" x="685" y="100" width="185" height="60"/>
+    <text x="777" y="122" text-anchor="middle">DoWhy causal engine</text>
+    <text class="s" x="777" y="138" text-anchor="middle">effects &middot; what-if &middot;</text>
+    <text class="s" x="777" y="152" text-anchor="middle">counterfactuals &middot; risk drivers</text>
 
     <rect class="b" x="430" y="190" width="440" height="76"/>
     <text x="650" y="215" text-anchor="middle">System prompt (the grounding)</text>
     <text class="s" x="650" y="234" text-anchor="middle">ontology (schema + semantics) &middot; entity vocabulary pulled live from the graph</text>
-    <text class="s" x="650" y="250" text-anchor="middle">canonical causal query patterns (diff-in-diff, promotion effect, lead-time paths)</text>
+    <text class="s" x="650" y="250" text-anchor="middle">question taxonomy: factual &middot; effect &middot; what-if &middot; counterfactual &middot; future risk</text>
     <line x1="520" y1="190" x2="520" y2="135"/><path class="edge" d="M515,141 L520,133 L525,141"/>
   </svg>
 
   <h3>The agentic loop, step by step</h3>
   <ol>
-    <li>Your question (plus conversation history) goes to the LLM with a system prompt containing the <b>ontology</b>, an <b>entity vocabulary</b> queried from the graph at startup, and <b>canonical causal query patterns</b>.</li>
-    <li>The model classifies the question — factual or causal — and issues one or more Cypher queries through its single tool, <code>run_cypher</code>.</li>
-    <li>Each query is screened (write clauses rejected, executed inside a read-only transaction, results capped at 60 rows) and the rows return to the model as JSON.</li>
-    <li>The model iterates — refining queries, recovering from errors — until it can compose an answer <i>from the query results only</i>.</li>
-    <li>The UI renders the answer plus the full <b>query trace</b>, so you can audit exactly what evidence produced it.</li>
+    <li>Your question (plus conversation history) goes to the LLM with a system prompt containing the <b>ontology</b>, an <b>entity vocabulary</b> queried from the graph at startup, and a <b>five-way question taxonomy</b> with canonical patterns.</li>
+    <li>The model classifies the question — factual, causal effect, what-if, counterfactual, or future risk — and picks tools: <code>run_cypher</code> for lookups and cohort discovery, <code>estimate_effect</code> / <code>what_if</code> / <code>counterfactual</code> / <code>explain_stockout_risk</code> for the causal work.</li>
+    <li>Cypher is screened (write clauses rejected, read-only transactions, 60-row cap); causal tools run DoWhy over a pandas panel of all 63k snapshots with a structural causal model fitted at startup.</li>
+    <li>The model iterates — refining queries, recovering from errors — until it can compose an answer <i>from tool results only</i>.</li>
+    <li>The UI renders the answer plus the full <b>tool trace</b>, so you can audit exactly what evidence produced it.</li>
   </ol>
 
   <h3>Safety properties</h3>
@@ -249,11 +257,12 @@
   <h3>Stack</h3>
   <table>
     <tr><th>Layer</th><th>Technology</th><th>Role</th></tr>
-    <tr><td>Graph database</td><td>Neo4j Aura (cloud)</td><td>Supply chain structure + 52-week history</td></tr>
-    <tr><td>Agent / LLM</td><td>OpenAI (function calling)</td><td>Question understanding, query planning, explanation</td></tr>
+    <tr><td>Graph database</td><td>Neo4j Aura (cloud)</td><td>Supply chain structure + 52-week history + 25-week projection</td></tr>
+    <tr><td>Causal engine</td><td>DoWhy (dowhy + dowhy.gcm)</td><td>Backdoor effect estimation + refuters, SCM what-ifs, counterfactuals, risk drivers</td></tr>
+    <tr><td>Agent / LLM</td><td>OpenAI (function calling)</td><td>Question understanding, tool planning, explanation</td></tr>
     <tr><td>Backend</td><td>FastAPI (Python)</td><td>Agent loop, tool execution, guards</td></tr>
-    <tr><td>Frontend</td><td>Static HTML/JS</td><td>Chat, query trace, this documentation</td></tr>
-    <tr><td>Data generation</td><td>Python simulation</td><td>Deterministic seeding with planted causal effects</td></tr>
+    <tr><td>Frontend</td><td>Static HTML/JS</td><td>Chat, tool trace, this documentation</td></tr>
+    <tr><td>Data generation</td><td>Python simulation</td><td>Deterministic seeding with planted causal effects & risk storylines</td></tr>
   </table>
 </div></section>
 
@@ -293,13 +302,7 @@
 
     <g class="nt"><rect x="210" y="330" width="180" height="46"/>
       <text x="300" y="349" text-anchor="middle">Regional DC</text>
-      <text class="s" x="300" y="365" text-anchor="middle">6 regional hubs</text></g>
-    <line x1="300" y1="376" x2="300" y2="414"/><path class="head" d="M295,408 L300,417 L305,408 Z"/>
-    <text class="s" x="308" y="399">SHIPS_TO</text>
-
-    <g class="nt"><rect x="210" y="420" width="180" height="46"/>
-      <text x="300" y="439" text-anchor="middle">Store</text>
-      <text class="s" x="300" y="455" text-anchor="middle">20 retail stores</text></g>
+      <text class="s" x="300" y="365" text-anchor="middle">6 hubs — customer demand</text></g>
 
     <g class="np"><rect x="470" y="60" width="180" height="46"/>
       <text x="560" y="79" text-anchor="middle">RawMaterial</text>
@@ -311,7 +314,7 @@
 
     <g class="ng"><rect x="470" y="420" width="180" height="56"/>
       <text x="560" y="443" text-anchor="middle">WeeklySnapshot</text>
-      <text class="s" x="560" y="459" text-anchor="middle">105k rows, 52 weeks</text></g>
+      <text class="s" x="560" y="459" text-anchor="middle">63k rows: 52wk history + 25wk projection</text></g>
 
     <line x1="390" y1="83" x2="462" y2="83"/><path class="head" d="M456,78 L465,83 L456,88 Z"/>
     <text class="s" x="427" y="75" text-anchor="middle">SUPPLIES</text>
@@ -322,8 +325,8 @@
     <line x1="390" y1="263" x2="462" y2="263"/><path class="head" d="M456,258 L465,263 L456,268 Z"/>
     <text class="s" x="427" y="255" text-anchor="middle">STOCKS</text>
 
-    <line x1="390" y1="430" x2="462" y2="293"/><path class="head" d="M455,301 L465,288 L463,304 Z"/>
-    <text class="s" x="400" y="382">SELLS</text>
+    <line x1="390" y1="340" x2="462" y2="285"/><path class="head" d="M454,291 L465,283 L460,297 Z"/>
+    <text class="s" x="404" y="318">SELLS</text>
 
     <line x1="560" y1="240" x2="560" y2="112"/><path class="head" d="M555,118 L560,109 L565,118 Z"/>
     <text class="s" x="552" y="176" text-anchor="end">MADE_FROM (BOM)</text>
@@ -331,18 +334,18 @@
     <line x1="560" y1="420" x2="560" y2="292"/><path class="head" d="M555,298 L560,289 L565,298 Z"/>
     <text class="s" x="552" y="358" text-anchor="end">FOR_PRODUCT</text>
 
-    <line x1="390" y1="452" x2="462" y2="452"/><path class="head" d="M456,447 L465,452 L456,457 Z"/>
-    <text class="s" x="427" y="444" text-anchor="middle">HAS_SNAPSHOT</text>
+    <line x1="390" y1="368" x2="462" y2="440"/><path class="head" d="M453,437 L465,443 L459,431 Z"/>
+    <text class="s" x="396" y="412">HAS_SNAPSHOT</text>
 
     <g class="ng"><rect x="30" y="140" width="150" height="46"/>
       <text x="105" y="159" text-anchor="middle">DisruptionEvent</text>
-      <text class="s" x="105" y="175" text-anchor="middle">4 events</text></g>
+      <text class="s" x="105" y="175" text-anchor="middle">6: past &middot; ongoing &middot; future</text></g>
     <line class="dash" x1="180" y1="152" x2="206" y2="88"/>
     <line class="dash" x1="180" y1="163" x2="206" y2="173"/>
     <line class="dash" x1="180" y1="176" x2="206" y2="258"/>
     <text class="s" x="105" y="204" text-anchor="middle">AFFECTS</text>
 
-    <text class="s a" x="300" y="505" text-anchor="middle">every SHIPS_TO hop carries lead_time_days — disruptions propagate down this chain with ~1 week lag per echelon</text>
+    <text class="s a" x="340" y="505" text-anchor="middle">regional DCs are the demand-facing terminal nodes; disruptions propagate down the SHIPS_TO chain with ~1 week lag per echelon</text>
   </svg>
 
   <h3>Node types (the ontology's entities)</h3>
@@ -351,12 +354,11 @@
     <tr><td><code>Supplier</code></td><td>Raw material vendor</td><td>name, location, reliability</td></tr>
     <tr><td><code>RawMaterial</code></td><td>Manufacturing input</td><td>name</td></tr>
     <tr><td><code>Plant</code></td><td>Factory producing finished SKUs</td><td>name, location, categories</td></tr>
-    <tr><td><code>DistributionCenter</code></td><td>Warehouse hub</td><td>name, tier (central / regional)</td></tr>
-    <tr><td><code>Store</code></td><td>Retail endpoint with demand</td><td>city, format</td></tr>
+    <tr><td><code>DistributionCenter</code></td><td>Warehouse hub; regional DCs face external customer demand</td><td>name, tier (central / regional)</td></tr>
     <tr><td><code>Product</code></td><td>Finished SKU</td><td>sku_id, name, unit_cost, list_price, shelf life</td></tr>
     <tr><td><code>Category</code></td><td>Product family (5)</td><td>Beverages, Snacks, Personal/Home Care, Dairy</td></tr>
-    <tr><td><code>DisruptionEvent</code></td><td>Supply shock</td><td>type, severity, start_date, duration_days</td></tr>
-    <tr><td><code>WeeklySnapshot</code></td><td>One (location, SKU, week) observation</td><td>demand, units_sold, units_received, on_hand, stockout, on_promotion, price</td></tr>
+    <tr><td><code>DisruptionEvent</code></td><td>Supply shock — past, ongoing, or announced-future</td><td>type, severity, start_date, duration_days</td></tr>
+    <tr><td><code>WeeklySnapshot</code></td><td>One (DC, SKU, week) observation or projection</td><td>demand, forecast_demand, units_sold, units_received, on_hand, stockout, on_promotion, price, supply_factor, projected</td></tr>
   </table>
 
   <h3>Relationship types (the ontology's verbs)</h3>
@@ -366,21 +368,21 @@
     <tr><td><code>SUPPLIES</code></td><td>Supplier &rarr; RawMaterial</td><td>Sourcing: who a shortage starts with</td></tr>
     <tr><td><code>MADE_FROM</code></td><td>Product &rarr; RawMaterial</td><td>Bill of materials: which SKUs a material problem reaches</td></tr>
     <tr><td><code>PRODUCES</code></td><td>Plant &rarr; Product</td><td>Capacity: what a plant outage halts</td></tr>
-    <tr><td><code>STOCKS</code></td><td>DC / Store &rarr; Product</td><td>Current inventory position, safety stock, fill rate</td></tr>
-    <tr><td><code>SELLS</code></td><td>Store &rarr; Product</td><td>Demand profile, price, promotion state</td></tr>
+    <tr><td><code>STOCKS</code></td><td>DC &rarr; Product</td><td>Current inventory position, safety stock, fill rate</td></tr>
+    <tr><td><code>SELLS</code></td><td>regional DC &rarr; Product</td><td>External demand profile, price, promotion state</td></tr>
     <tr><td><code>AFFECTS</code></td><td>DisruptionEvent &rarr; Supplier / Plant / DC</td><td>Anchors causal treatments to the network</td></tr>
-    <tr><td><code>HAS_SNAPSHOT</code> / <code>FOR_PRODUCT</code></td><td>Location &rarr; WeeklySnapshot &rarr; Product</td><td>The time dimension: 52 weeks at every stocked pair</td></tr>
+    <tr><td><code>HAS_SNAPSHOT</code> / <code>FOR_PRODUCT</code></td><td>DC &rarr; WeeklySnapshot &rarr; Product</td><td>The time dimension: 77 weeks (52 observed + 25 projected) at every stocked pair</td></tr>
   </table>
 
   <h3>How the ontology is used at runtime</h3>
   <ul>
     <li>The full schema above is embedded in the agent's system prompt — so it writes correct Cypher patterns instead of guessing structure.</li>
-    <li>An <b>entity vocabulary</b> (every supplier, material, plant, DC, city, and event name) is queried from the graph when the server starts. Graph string-matching is case-sensitive; the vocabulary means the model copies exact names instead of inventing them.</li>
-    <li>The semantics ("MADE_FROM is the BOM", "supply disruptions propagate downstream with ~1 week lag per echelon") turn schema into <i>causal knowledge</i> the model can reason with.</li>
+    <li>An <b>entity vocabulary</b> (every supplier, material, plant, DC, and event name) is queried from the graph when the server starts. Graph string-matching is case-sensitive; the vocabulary means the model copies exact names instead of inventing them.</li>
+    <li>The semantics ("MADE_FROM is the BOM", "supply disruptions propagate downstream with ~1 week lag per echelon", "demand attainment above ~115% of forecast erodes inventory") turn schema into <i>causal knowledge</i> the model can reason with.</li>
   </ul>
 
   <div class="callout">
-    The graph was seeded by deterministic Python scripts (same random seed &rarr; same graph), then the 52-week history was produced by a small multi-echelon simulation — order-up-to inventory policies, seasonality, promotions, and disruption shocks that reduce inbound supply along affected lanes. Everything runs on a free Neo4j Aura cloud instance.
+    The graph was seeded by deterministic Python scripts (same random seed &rarr; same graph), then the 52-week history was produced by a small multi-echelon simulation — order-up-to inventory policies planned to forecast, seasonality, promotions, and disruption shocks that reduce inbound supply along affected lanes. The 25 projected weeks extend the same inventory-balance equations forward deterministically: projected demand = forecast &times; recent demand attainment, receipts capped by the committed supply plan. Everything runs on a free Neo4j Aura cloud instance.
   </div>
 </div></section>
 
@@ -394,42 +396,47 @@
       <p>Maps business terms to graph structure: "sugar shortage" &rarr; a DisruptionEvent; "exposed SKUs" &rarr; Products reachable via SUPPLIES + MADE_FROM. Without it, the LLM guesses schema and hallucinates entities.</p></div>
     <div class="card"><h4>2 &middot; Neo4j graph — the pathways</h4>
       <p>Causal influence travels along edges: event &rarr; supplier &rarr; material &rarr; BOM &rarr; SKU &rarr; DC &rarr; store. Multi-hop traversal finds the <i>treated group</i> (exposed SKUs/stores) and the <i>control group</i> (everything else) — the hard part of causal analysis.</p></div>
-    <div class="card"><h4>3 &middot; Causal inference — the evidence</h4>
-      <p>Weekly snapshots supply before/after variation. Difference-in-differences over treated vs control &times; before vs during separates the event's effect from seasonality and noise.</p></div>
+    <div class="card"><h4>3 &middot; DoWhy engine — the evidence</h4>
+      <p>A structural causal model fitted to the weekly snapshots. Effect questions get backdoor-adjusted estimates with placebo refutation tests; what-ifs get interventional simulation; "would it have happened?" gets true rung-3 counterfactuals.</p></div>
   </div>
+
+  <h3>Pearl's ladder, operationalized as tools</h3>
+  <table>
+    <tr><th>Rung</th><th>Question shape</th><th>Tool</th><th>Method</th></tr>
+    <tr><td>1 &middot; Association</td><td>what / where / how much</td><td><code>run_cypher</code></td><td>Graph lookups &amp; aggregation</td></tr>
+    <tr><td>2 &middot; Intervention</td><td>what is the effect of X</td><td><code>estimate_effect</code></td><td>DoWhy backdoor adjustment + placebo &amp; random-common-cause refuters</td></tr>
+    <tr><td>2 &middot; Intervention</td><td>what would happen if&hellip;</td><td><code>what_if</code></td><td>Interventional sampling from the fitted SCM (dowhy.gcm)</td></tr>
+    <tr><td>3 &middot; Counterfactual</td><td>would Y have happened without X</td><td><code>counterfactual</code></td><td>Abduction &rarr; action &rarr; prediction on the observed week</td></tr>
+    <tr><td>Future risk</td><td>will X stock out, and why</td><td><code>explain_stockout_risk</code></td><td>Projected inventory balance decomposed into named drivers</td></tr>
+  </table>
 
   <h3>The pipeline for a causal question</h3>
   <ol>
-    <li><b>Classify</b> — is this factual (lookup) or causal (effect/attribution)? Factual questions go straight to Cypher.</li>
-    <li><b>Trace the pathway</b> — traverse the graph from the treatment to its exposure set, e.g. <code>(event)-[:AFFECTS]-&gt;(supplier)-[:SUPPLIES]-&gt;(material)&lt;-[:MADE_FROM]-(sku)</code>.</li>
-    <li><b>Build cohorts and windows</b> — treated vs control SKUs/stores; before vs during/after weeks, shifted for propagation lag (~1 week per echelon).</li>
-    <li><b>Aggregate the four cells</b> — stockout rate, units received, units sold, computed in Cypher over ~100k snapshots.</li>
-    <li><b>Report effect size + caveats</b> — differences and ratios, an explicit note on possible confounders, and honesty about correlation vs causation.</li>
+    <li><b>Classify</b> — factual, effect, what-if, counterfactual, or future risk.</li>
+    <li><b>Trace the pathway</b> — traverse the graph from the treatment to its exposure set, e.g. <code>(event)-[:AFFECTS]-&gt;(supplier)-[:SUPPLIES]-&gt;(material)&lt;-[:MADE_FROM]-(sku)</code> — the graph builds the treated/control cohorts.</li>
+    <li><b>Estimate</b> — the DoWhy engine adjusts for confounders (seasonality via each SKU's seasonal baseline, promotions) and runs refutation tests; a quick Cypher diff-in-diff can cross-check it.</li>
+    <li><b>Report effect size + caveats</b> — with refutation status, and projected-week numbers clearly labelled as plan, not observation.</li>
   </ol>
 
-  <h3>Worked example: "Did the sugar shortage cause stockouts?"</h3>
-  <p>The event hits one supplier in April 2026. The graph traversal finds the exposed SKUs; the snapshots give a natural difference-in-differences:</p>
-  <table>
-    <tr><th>Store-level stockout rate</th><th>Before impact window</th><th>During impact window</th><th>Change</th></tr>
-    <tr><td>Exposed SKUs (treated)</td><td>~0.9%</td><td>~1.8%</td><td><b>roughly doubles</b></td></tr>
-    <tr><td>Unexposed SKUs (control)</td><td>~0.4%</td><td>~0.4%</td><td>flat</td></tr>
-  </table>
-  <p>Controls staying flat in the very same weeks rules out seasonality and store-wide shocks — the parallel-trends logic of diff-in-diff. The effect also appears ~5 weeks after the event start, matching the expected propagation lag through plant &rarr; central DC &rarr; regional DC &rarr; store.</p>
+  <h3>Why future stockouts are explainable</h3>
+  <p>Every snapshot carries the demand <b>forecast</b> alongside actuals, and replenishment is planned to forecast with receipts capped near <b>115%</b> of it. The 25 projected weeks extend the inventory balance forward (projected demand = forecast &times; recent <b>demand attainment</b>). So when a projected week stocks out, the cause is decomposable: demand running persistently above forecast, an ongoing or announced disruption cutting the lane's <code>supply_factor</code>, a depleted starting position, a planned promotion spike — or several at once. <code>explain_stockout_risk</code> names each driver with its evidence.</p>
 
   <h3>Validation against ground truth</h3>
-  <p>Because the data is simulated, the true effects are known. The agent's answers are scored against them:</p>
+  <p>Because the data is simulated, the true effects are known. The engine's answers are scored against them:</p>
   <table>
-    <tr><th>Question</th><th>Planted truth</th><th>Agent's answer</th></tr>
-    <tr><td>Effect of promotions on units sold</td><td>&times;1.4 lift, 20% discount</td><td>+39&ndash;43% lift at ~20% lower price ✓</td></tr>
-    <tr><td>Cause of low western inventory, late June</td><td>Labor strike at National DC West</td><td>Correctly attributed to the strike ✓</td></tr>
-    <tr><td>Sugar-shortage stockout impact</td><td>Supply cut ~55%, lagged</td><td>Exposed-SKU stockouts double; controls flat ✓</td></tr>
+    <tr><th>Question</th><th>Planted truth</th><th>Engine's answer</th></tr>
+    <tr><td>Effect of promotions on units sold</td><td>&times;1.4 demand lift, 20% discount</td><td>ATE +39.4%, placebo test ≈ 0 ✓</td></tr>
+    <tr><td>Sugar-shortage stockout impact</td><td>Supply cut ~55%, ~4-week lag</td><td>Stockout rate ATE +0.22 in the lagged window ✓</td></tr>
+    <tr><td>Why is SKU-0070 at future risk?</td><td>Demand 125% of forecast since week 40, no disruption</td><td>demand_overshoot driver, attainment 122&ndash;134%, first risk mid-July ✓</td></tr>
+    <tr><td>Remove the ongoing resin fire (what-if)</td><td>supply_factor back to 1.0</td><td>Projected stockout rate 22.5% &rarr; 6.7%, demand unchanged ✓</td></tr>
   </table>
 
   <h3>Honest limitations</h3>
   <ul>
-    <li>This is <b>observational</b> causal inference — diff-in-diff with graph-derived cohorts — not a randomized experiment. Trap questions (e.g. "did promotions cause the December snack spike?" — it's seasonality) test whether the agent respects that line.</li>
-    <li>Effect estimates are aggregate comparisons; a production system would add a dedicated causal engine (DoWhy / EconML) for regression adjustment, placebo tests, and sensitivity analysis, with the graph still providing cohorts and pathways.</li>
-    <li>The LLM plans queries; small models occasionally under-query. The visible query trace keeps every answer auditable.</li>
+    <li>This is <b>observational</b> causal inference on top of a fitted SCM — not a randomized experiment. Trap questions (e.g. "did promotions cause the December snack spike?" — it's seasonality) test whether the agent respects that line.</li>
+    <li>What-ifs and counterfactuals are <b>single-week</b>: inventory carryover between weeks is held at observed values. Multi-week interventions ("expedite 500 units in week 53") need a re-projection tool.</li>
+    <li>The 25-week projection is deterministic — one path, not a distribution. A Monte Carlo layer would turn risk flags into probabilities.</li>
+    <li>The LLM plans tool calls; small models occasionally under-query. The visible tool trace keeps every answer auditable.</li>
   </ul>
 </div></section>
 </main>
@@ -499,10 +506,16 @@ function addBot(markdown, trace) {
   if (trace && trace.length) {
     const det = document.createElement("details");
     det.className = "trace";
-    det.innerHTML = `<summary>&#128269; ${trace.length} graph ${trace.length === 1 ? "query" : "queries"} executed</summary>` +
-      trace.map(t => `<div class="q"><pre>${escapeHtml(t.query.trim())}</pre>` +
-        `<div class="meta">${t.error ? `<span class="err">${escapeHtml(t.error)}</span>`
-                                      : `${t.row_count} row${t.row_count === 1 ? "" : "s"}`}</div></div>`).join("");
+    det.innerHTML = `<summary>&#128269; ${trace.length} tool ${trace.length === 1 ? "call" : "calls"} executed</summary>` +
+      trace.map(t => {
+        const tool = t.tool || "run_cypher";
+        const label = tool === "run_cypher" ? "" :
+          `<div class="meta" style="color:var(--accent2)">causal engine &middot; ${escapeHtml(tool)}</div>`;
+        const status = t.error ? `<span class="err">${escapeHtml(t.error)}</span>`
+                     : (t.row_count != null ? `${t.row_count} row${t.row_count === 1 ? "" : "s"}` : "ok");
+        return `<div class="q">${label}<pre>${escapeHtml((t.query || "").trim())}</pre>` +
+               `<div class="meta">${status}</div></div>`;
+      }).join("");
     div.appendChild(det);
   }
   chat.appendChild(div);

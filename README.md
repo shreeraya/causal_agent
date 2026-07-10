@@ -1,7 +1,10 @@
 # Causal Supply Chain Agent — Neo4j Setup
 
-Local Neo4j instance seeded with a synthetic multi-echelon supply chain, as the
-knowledge-graph foundation for a causal question-answering agent.
+Neo4j instance seeded with a synthetic multi-echelon, DC-terminal supply chain
+(52 weeks of history + 25 projected weeks), as the knowledge-graph foundation
+for a causal question-answering agent with a DoWhy engine for effect
+estimation, what-if simulation, counterfactuals, and future stockout-risk
+explanation.
 
 ## Connection details
 
@@ -26,7 +29,7 @@ Wipes the database and regenerates everything (deterministic, seed=42):
 
 ```powershell
 python seed_supply_chain.py       # static network + master data
-python add_weekly_snapshots.py    # 52 weeks of WeeklySnapshot nodes (run after seeding)
+python add_weekly_snapshots.py    # 77 weeks of WeeklySnapshot nodes: 52 history + 25 projected (run after seeding)
 ```
 
 Both scripts and the app read the connection from `.env` (falling back to the
@@ -58,7 +61,8 @@ To switch back to local, remove/comment the three lines in `.env`.
 
 ## Graph schema (ontology)
 
-**Echelons:** Supplier → Plant → Central DC → Regional DC → Store
+**Echelons:** Supplier → Plant → Central DC → Regional DC (terminal — regional
+DCs face external customer demand; there are no stores)
 
 **Nodes**
 
@@ -68,11 +72,10 @@ To switch back to local, remove/comment the three lines in `.env`.
 | `RawMaterial` | 25 | name |
 | `Plant` | 3 | plant_id, name, location, categories |
 | `DistributionCenter` | 8 (2 central + 6 regional) | dc_id, name, tier |
-| `Store` | 20 | store_id, city, format |
 | `Product` (SKU) | 120 | sku_id, name, unit_cost, list_price, shelf_life_days |
 | `Category` | 5 | name |
-| `DisruptionEvent` | 4 | event_id, type, severity, start_date, duration_days |
-| `WeeklySnapshot` | ~106k | loc_id, sku_id, week_start, week_index (0–51), demand, units_sold, units_received, on_hand_start/end, stockout, on_promotion, price |
+| `DisruptionEvent` | 6 (past, ongoing, announced-future) | event_id, type, severity, start_date, duration_days |
+| `WeeklySnapshot` | ~63k | loc_id, sku_id, week_start, week_index (0–76), demand, forecast_demand, units_sold, units_received, on_hand_start/end, stockout, on_promotion, price, supply_factor, projected |
 
 **Relationships**
 
@@ -82,41 +85,26 @@ To switch back to local, remove/comment the three lines in `.env`.
 | `SHIPS_TO` | any upstream → downstream node | lead_time_days, transport_mode |
 | `MADE_FROM` | Product → RawMaterial (BOM) | qty_per_unit |
 | `PRODUCES` | Plant → Product | capacity_per_week, unit_cost |
-| `STOCKS` | DC/Store → Product | on_hand, safety_stock, reorder_point, fill_rate, stockout_events_90d |
-| `SELLS` | Store → Product | avg_weekly_demand, demand_std, price, on_promotion, discount_pct |
+| `STOCKS` | DC → Product | on_hand, safety_stock, reorder_point, fill_rate, stockout_events_90d |
+| `SELLS` | regional DC → Product | avg_weekly_demand, demand_std, price, on_promotion, discount_pct |
 | `IN_CATEGORY` | Product → Category | |
 | `AFFECTS` | DisruptionEvent → Supplier/Plant/DC | |
-| `HAS_SNAPSHOT` | Store/DC → WeeklySnapshot | |
+| `HAS_SNAPSHOT` | DC → WeeklySnapshot | |
 | `FOR_PRODUCT` | WeeklySnapshot → Product | |
 
-## Time dimension
+## Time dimension: 52 weeks of history + 25 projected weeks
 
-52 weeks of weekly snapshots (2025-07-07 → 2026-06-29) at every stocked
-(location, SKU) pair, at both store and DC level. The numbers come from a
-multi-echelon simulation with real causal structure planted in the data
-(promotion lift, seasonality, disruption events propagating downstream with
-lags) — the answer key is in `GROUND_TRUTH.md` (don't feed it to the agent;
-use it to validate the agent's causal answers).
-
-Time-series query example — weekly sales and stockouts for one SKU at one store:
-
-```cypher
-MATCH (st:Store {city:'Boston'})-[:HAS_SNAPSHOT]->(x:WeeklySnapshot)-[:FOR_PRODUCT]->(p:Product {sku_id:'SKU-0001'})
-RETURN x.week_start AS week, x.demand, x.units_sold, x.units_received, x.on_hand_end, x.stockout
-ORDER BY week;
-```
-
-Diff-in-diff style check — stockout rate for sugar-affected vs unaffected SKUs, before/during the shortage:
-
-```cypher
-MATCH (e:DisruptionEvent {event_id:'EVT-004'})-[:AFFECTS]->(:Supplier)-[:SUPPLIES]->(:RawMaterial)<-[:MADE_FROM]-(p:Product)
-WITH collect(DISTINCT p.sku_id) AS hit
-MATCH (:Store)-[:HAS_SNAPSHOT]->(x:WeeklySnapshot)
-RETURN x.sku_id IN hit AS affected,
-       x.week_index >= 44 AND x.week_index <= 48 AS during_impact,
-       avg(CASE WHEN x.stockout THEN 1.0 ELSE 0.0 END) AS stockout_rate
-ORDER BY affected, during_impact;
-```
+Weekly snapshots at every stocked (DC, SKU) pair. Weeks 0–51
+(2025-07-07 → 2026-06-29) are simulated history; "today" is 2026-07-06 (start
+of week 52); weeks 52–76 (`projected: true`, → 2026-12-21) are a deterministic
+inventory-balance projection: projected demand = forecast × trailing 8-week
+demand attainment, receipts planned to forecast and capped at ~115% of it, so
+both past demand overshoot and ongoing/announced disruptions surface as
+**future stockout risk**. Every snapshot carries `forecast_demand` (the demand
+plan) and `supply_factor` (< 1 ⇒ disruption constrains the lane). The causal
+structure planted in the data (promotion lift ×1.4, seasonality, disruptions
+propagating with ~1-week lag per echelon, demand-overshoot SKUs) is documented
+in `GROUND_TRUTH.md` — don't feed it to the agent; use it to validate answers.
 
 ## Sample queries
 
@@ -124,34 +112,47 @@ Factual — where is a SKU stocked and how much is on hand?
 
 ```cypher
 MATCH (loc)-[s:STOCKS]->(p:Product {sku_id: 'SKU-0001'})
-RETURN labels(loc)[0] AS echelon, coalesce(loc.name, loc.store_id) AS location,
-       s.on_hand, s.safety_stock ORDER BY echelon;
+RETURN loc.dc_id AS dc, loc.tier AS tier, s.on_hand, s.safety_stock ORDER BY tier;
 ```
 
-Factual — total lead time from a supplier to a store:
+Factual — total lead time from a supplier to a regional DC:
 
 ```cypher
-MATCH path = (sup:Supplier {name: 'GlobalSweet Ltd'})-[:SHIPS_TO*..5]->(st:Store {city: 'Boston'})
+MATCH path = (sup:Supplier {name: 'GlobalSweet Ltd'})-[:SHIPS_TO*..4]->(d:DistributionCenter {dc_id: 'RDC-01'})
 RETURN [n IN nodes(path) | coalesce(n.name, n.dc_id)] AS route,
        reduce(t = 0, r IN relationships(path) | t + r.lead_time_days) AS total_days
 ORDER BY total_days LIMIT 1;
 ```
 
-Causal-flavored — which SKUs (and stores) are exposed to the sugar shortage?
+Future risk — which SKUs are projected to stock out, where, from when?
 
 ```cypher
-MATCH (e:DisruptionEvent {type: 'raw_material_shortage'})-[:AFFECTS]->(sup:Supplier)
-      -[:SUPPLIES]->(m:RawMaterial)<-[:MADE_FROM]-(p:Product)<-[s:SELLS]-(st:Store)
-RETURN p.name, count(DISTINCT st) AS stores_affected, sum(s.avg_weekly_demand) AS weekly_demand_at_risk
-ORDER BY weekly_demand_at_risk DESC LIMIT 10;
+MATCH (d:DistributionCenter {tier:'regional'})-[:HAS_SNAPSHOT]->(x:WeeklySnapshot {projected:true})
+WHERE x.stockout
+RETURN x.sku_id AS sku, x.loc_id AS dc, min(x.week_index) AS first_risk_week, count(*) AS risk_weeks
+ORDER BY risk_weeks DESC LIMIT 15;
 ```
 
-Causal-flavored — do promotions coincide with more stockouts?
+Demand attainment — whose demand is running above the plan?
 
 ```cypher
-MATCH (st:Store)-[sl:SELLS]->(p:Product)<-[sk:STOCKS]-(st)
-RETURN sl.on_promotion AS promo, avg(sk.stockout_events_90d) AS avg_stockouts,
-       avg(sk.fill_rate) AS avg_fill_rate;
+MATCH (:DistributionCenter {tier:'regional'})-[:HAS_SNAPSHOT]->(x:WeeklySnapshot)
+WHERE NOT x.projected AND x.week_index >= 44
+RETURN x.sku_id AS sku, avg(toFloat(x.demand)/x.forecast_demand) AS attainment
+ORDER BY attainment DESC LIMIT 10;
+```
+
+Diff-in-diff quick check — stockout rate for sugar-affected vs unaffected SKUs:
+
+```cypher
+MATCH (e:DisruptionEvent {event_id:'EVT-004'})-[:AFFECTS]->(:Supplier)-[:SUPPLIES]->(:RawMaterial)<-[:MADE_FROM]-(p:Product)
+WITH collect(DISTINCT p.sku_id) AS hit
+MATCH (:DistributionCenter {tier:'regional'})-[:HAS_SNAPSHOT]->(x:WeeklySnapshot)
+WHERE NOT x.projected
+RETURN x.sku_id IN hit AS affected,
+       x.week_index >= 45 AND x.week_index <= 48 AS during_impact,
+       avg(CASE WHEN x.stockout THEN 1.0 ELSE 0.0 END) AS stockout_rate
+ORDER BY affected, during_impact;
 ```
 
 ## Chatbot
@@ -159,12 +160,21 @@ RETURN sl.on_promotion AS promo, avg(sk.stockout_events_90d) AS avg_stockouts,
 `app.py` is a FastAPI app serving a chat UI at http://localhost:8000. Each turn
 runs an agentic loop: an OpenAI model (default `gpt-4o-mini`, set via
 `OPENAI_MODEL`) grounded in the graph ontology plus an entity vocabulary pulled
-live from the graph at startup, with a read-only `run_cypher` tool. The agent
-classifies questions as factual (direct Cypher lookups) or causal (diff-in-diff
-style comparisons over the WeeklySnapshot series, with confounder awareness —
-the system prompt includes canonical query patterns for both), and answers only
-from query results. The UI shows every executed Cypher query in an expandable
-trace under each answer.
+live from the graph at startup, with five tools:
+
+| Tool | What it does |
+|---|---|
+| `run_cypher` | read-only Cypher against the graph (lookups, cohort discovery, projected-risk scans) |
+| `estimate_effect` | DoWhy backdoor-adjusted causal effect (promotions, disruption events) + placebo / random-common-cause refutation tests |
+| `what_if` | interventional simulation over DC-weeks via a fitted `dowhy.gcm` structural causal model (e.g. remove a disruption, run promos, demand +20%) |
+| `counterfactual` | Pearl rung-3 abduction-action-prediction for one specific (DC, SKU, week) |
+| `explain_stockout_risk` | projected stockout risk report per SKU with named drivers: demand attainment vs forecast, active/announced disruptions, low starting cover, planned promotions |
+
+The engine (`causal_engine.py`) pulls the snapshot panel to pandas at startup
+and fits an invertible SCM mirroring the true data-generating process;
+`units_sold`/`stockout` are derived exactly from the structural equations, so
+counterfactuals carry no ML error on those nodes. The UI shows every tool call
+(Cypher or causal) in an expandable trace under each answer.
 
 Setup (one time): create a `.env` file next to `app.py`:
 
@@ -173,7 +183,7 @@ OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-4o-mini   # use gpt-4o for stronger causal reasoning
 ```
 
-Run (Neo4j must be up first — `.\start_neo4j.ps1`):
+Run (Neo4j must be up first — `.\start_neo4j.ps1`, or Aura via `.env`):
 
 ```powershell
 python -m uvicorn app:app --port 8000
@@ -181,9 +191,11 @@ python -m uvicorn app:app --port 8000
 
 Safety: the `run_cypher` tool rejects write clauses (CREATE/MERGE/SET/DELETE/…)
 and runs everything inside read transactions; results are capped at 60 rows.
+Requires `dowhy` (`pip install dowhy pandas`).
 
 ## Next steps for the agent
 
 1. Validate the agent's causal answers against `GROUND_TRUTH.md` (don't put that file in its context).
-2. Optionally add a dedicated causal-inference tool (DoWhy / EconML over snapshot data pulled to pandas) for effects Cypher aggregation can't estimate (regression adjustment, IV).
-3. Formalize the ontology as RDF/OWL if you want schema-constrained entity linking.
+2. Monte Carlo projection (probability of stockout per week) layered on the deterministic baseline.
+3. A re-projection tool for multi-week what-ifs that change inventory carryover (e.g. "expedite 500 units in week 53").
+4. Formalize the ontology as RDF/OWL if you want schema-constrained entity linking.

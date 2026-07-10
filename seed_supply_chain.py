@@ -1,18 +1,19 @@
 """
 Seed a multi-echelon supply chain graph into Neo4j.
 
-Topology (4 echelons):
-    Suppliers -> Plants -> Central DCs -> Regional DCs -> Retail Stores
+Topology (DC-terminal — no stores):
+    Suppliers -> Plants -> Central DCs -> Regional DCs
+    Regional DCs are the demand-facing terminal nodes: they serve external
+    customer demand directly.
 
 Ontology:
     (:Supplier)         raw material vendors
     (:RawMaterial)      inputs to manufacturing
     (:Plant)            factories producing finished SKUs
     (:DistributionCenter {tier: 'central'|'regional'})
-    (:Store)            retail endpoints with demand
     (:Product)          finished SKUs (120 of them)
     (:Category)         product categories
-    (:DisruptionEvent)  supply disruptions (for causal questions)
+    (:DisruptionEvent)  supply disruptions — past, ongoing, and announced-future
 
 Relationships:
     (Supplier)-[:SUPPLIES {cost_per_unit, reliability}]->(RawMaterial)
@@ -21,9 +22,8 @@ Relationships:
     (Plant)-[:PRODUCES {capacity_per_week, unit_cost}]->(Product)
     (Plant)-[:SHIPS_TO {lead_time_days}]->(DC central)
     (DC central)-[:SHIPS_TO {lead_time_days}]->(DC regional)
-    (DC regional)-[:SHIPS_TO {lead_time_days}]->(Store)
-    (DC|Store)-[:STOCKS {on_hand, safety_stock, reorder_point, fill_rate, stockout_events_90d}]->(Product)
-    (Store)-[:SELLS {avg_weekly_demand, demand_std, price, on_promotion}]->(Product)
+    (DC)-[:STOCKS {on_hand, safety_stock, reorder_point, fill_rate, stockout_events_90d}]->(Product)
+    (DC regional)-[:SELLS {avg_weekly_demand, demand_std, price, on_promotion, discount_pct}]->(Product)
     (Product)-[:IN_CATEGORY]->(Category)
     (DisruptionEvent)-[:AFFECTS]->(Supplier|Plant|DC)
 
@@ -93,15 +93,6 @@ REGIONAL_DCS = [
     ("RDC-06", "Northwest RDC", "Portland, OR", "CDC-02"),
 ]
 
-STORE_CITIES = {
-    "RDC-01": ["New York", "Boston", "Philadelphia", "Buffalo"],
-    "RDC-02": ["Miami", "Orlando", "Nashville"],
-    "RDC-03": ["Chicago", "Detroit", "Minneapolis", "St Louis"],
-    "RDC-04": ["Phoenix", "Denver", "Albuquerque"],
-    "RDC-05": ["Los Angeles", "San Francisco", "San Diego"],
-    "RDC-06": ["Seattle", "Portland", "Boise"],
-}
-
 # which raw materials plausibly feed each category (indices into RAW_MATERIALS)
 CATEGORY_MATERIALS = {
     "Beverages":     [0, 1, 2, 3, 4, 20, 24],
@@ -161,7 +152,6 @@ CONSTRAINTS = [
     "CREATE CONSTRAINT supplier_id IF NOT EXISTS FOR (s:Supplier) REQUIRE s.supplier_id IS UNIQUE",
     "CREATE CONSTRAINT plant_id IF NOT EXISTS FOR (p:Plant) REQUIRE p.plant_id IS UNIQUE",
     "CREATE CONSTRAINT dc_id IF NOT EXISTS FOR (d:DistributionCenter) REQUIRE d.dc_id IS UNIQUE",
-    "CREATE CONSTRAINT store_id IF NOT EXISTS FOR (s:Store) REQUIRE s.store_id IS UNIQUE",
     "CREATE CONSTRAINT material_name IF NOT EXISTS FOR (m:RawMaterial) REQUIRE m.name IS UNIQUE",
     "CREATE CONSTRAINT category_name IF NOT EXISTS FOR (c:Category) REQUIRE c.name IS UNIQUE",
     "CREATE CONSTRAINT event_id IF NOT EXISTS FOR (e:DisruptionEvent) REQUIRE e.event_id IS UNIQUE",
@@ -282,28 +272,8 @@ def seed(driver):
             SET rel.lead_time_days = toInteger(rand()*4) + 2
         """)
 
-        # --- stores
-        store_rows, snum = [], 0
-        for rdc, cities in STORE_CITIES.items():
-            for city in cities:
-                snum += 1
-                store_rows.append({
-                    "store_id": f"ST-{snum:03d}", "name": f"{city} Store", "city": city,
-                    "rdc": rdc, "lt": random.randint(1, 3),
-                    "format": random.choice(["hypermarket", "supermarket", "convenience"]),
-                })
-        s.run("""
-            UNWIND $rows AS r
-            MERGE (st:Store {store_id: r.store_id})
-            SET st.name = r.name, st.city = r.city, st.format = r.format
-            WITH st, r
-            MATCH (d:DistributionCenter {dc_id: r.rdc})
-            MERGE (d)-[rel:SHIPS_TO]->(st)
-            SET rel.lead_time_days = r.lt
-        """, rows=store_rows)
-
-        # --- inventory (STOCKS) at DCs and stores, demand (SELLS) at stores
-        # central DCs stock everything; regional DCs stock ~80%; stores stock ~50%
+        # --- inventory (STOCKS) at DCs, external demand (SELLS) at regional DCs
+        # central DCs stock everything; regional DCs stock ~80% and face customer demand
         sku_ids = [x["sku_id"] for x in skus]
 
         def stock_row(loc_id, sku_id, scale):
@@ -317,11 +287,23 @@ def seed(driver):
                 "stockout_events_90d": max(0, int(random.gauss(2, 2))),
             }
 
-        dc_stock = []
+        dc_stock, sells = [], []
         for cdc, _, _ in CENTRAL_DCS:
             dc_stock += [stock_row(cdc, k, 4.0) for k in sku_ids]
         for rdc, _, _, _ in REGIONAL_DCS:
-            dc_stock += [stock_row(rdc, k, 2.0) for k in random.sample(sku_ids, int(len(sku_ids) * 0.8))]
+            assort = random.sample(sku_ids, int(len(sku_ids) * 0.8))
+            dc_stock += [stock_row(rdc, k, 2.0) for k in assort]
+            # external customer demand served directly from the regional DC
+            for k in assort:
+                promo = random.random() < 0.15
+                base = random.randint(100, 900)
+                sells.append({
+                    "dc": rdc, "sku": k,
+                    "avg_weekly_demand": int(base * (1.4 if promo else 1.0)),
+                    "demand_std": round(base * random.uniform(0.15, 0.4), 1),
+                    "on_promotion": promo,
+                    "discount_pct": round(random.uniform(0.1, 0.3), 2) if promo else 0.0,
+                })
         s.run("""
             UNWIND $rows AS r
             MATCH (d:DistributionCenter {dc_id: r.loc}), (p:Product {sku_id: r.sku})
@@ -330,33 +312,10 @@ def seed(driver):
                 st.reorder_point = r.reorder_point, st.fill_rate = r.fill_rate,
                 st.stockout_events_90d = r.stockout_events_90d
         """, rows=dc_stock)
-
-        store_stock, sells = [], []
-        for row in store_rows:
-            assort = random.sample(sku_ids, int(len(sku_ids) * random.uniform(0.4, 0.6)))
-            for k in assort:
-                store_stock.append(stock_row(row["store_id"], k, 0.5))
-                promo = random.random() < 0.15
-                base = random.randint(20, 300)
-                sells.append({
-                    "store": row["store_id"], "sku": k,
-                    "avg_weekly_demand": int(base * (1.4 if promo else 1.0)),
-                    "demand_std": round(base * random.uniform(0.15, 0.5), 1),
-                    "price": None, "on_promotion": promo,
-                    "discount_pct": round(random.uniform(0.1, 0.3), 2) if promo else 0.0,
-                })
         s.run("""
             UNWIND $rows AS r
-            MATCH (st:Store {store_id: r.loc}), (p:Product {sku_id: r.sku})
-            MERGE (st)-[x:STOCKS]->(p)
-            SET x.on_hand = r.on_hand, x.safety_stock = r.safety_stock,
-                x.reorder_point = r.reorder_point, x.fill_rate = r.fill_rate,
-                x.stockout_events_90d = r.stockout_events_90d
-        """, rows=store_stock)
-        s.run("""
-            UNWIND $rows AS r
-            MATCH (st:Store {store_id: r.store}), (p:Product {sku_id: r.sku})
-            MERGE (st)-[x:SELLS]->(p)
+            MATCH (d:DistributionCenter {dc_id: r.dc}), (p:Product {sku_id: r.sku})
+            MERGE (d)-[x:SELLS]->(p)
             SET x.avg_weekly_demand = r.avg_weekly_demand, x.demand_std = r.demand_std,
                 x.price = round(p.list_price * (1 - r.discount_pct), 2),
                 x.on_promotion = r.on_promotion, x.discount_pct = r.discount_pct
@@ -380,6 +339,17 @@ def seed(driver):
              "start_date": "2026-04-20", "duration_days": 30,
              "description": "Poor harvest cut sugar supply from GlobalSweet",
              "targets": ["SUP-02"]},
+            # ongoing event: started 2 weeks before 'today' (2026-07-06), still active,
+            # its downstream impact lands mostly in the projected weeks
+            {"event_id": "EVT-005", "type": "raw_material_shortage", "severity": "high",
+             "start_date": "2026-06-22", "duration_days": 35,
+             "description": "Fire at PetroPolymers resin unit halted polymer and packaging film supply (ongoing)",
+             "targets": ["SUP-07"]},
+            # announced future event: planned maintenance, known in advance
+            {"event_id": "EVT-006", "type": "plant_shutdown", "severity": "medium",
+             "start_date": "2026-09-14", "duration_days": 14,
+             "description": "Planned maintenance shutdown announced for Midwest Beverage & Dairy Plant",
+             "targets": ["PLANT-01"]},
         ]
         s.run("""
             UNWIND $rows AS r

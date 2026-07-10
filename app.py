@@ -3,10 +3,16 @@ Supply Chain Causal Agent — chatbot backend (OpenAI).
 
 FastAPI app serving a chat UI (static/index.html) and POST /api/chat.
 Each chat turn runs an agentic loop: an OpenAI model grounded in the graph
-ontology, with one tool — run_cypher — that executes read-only Cypher against
-the local Neo4j supply chain graph. The agent classifies questions as factual
-(direct graph lookups) or causal (diff-in-diff style comparisons over the
-WeeklySnapshot time series) and answers from query results only.
+ontology, with five tools:
+
+  run_cypher             read-only Cypher against the Neo4j supply chain graph
+  estimate_effect        DoWhy backdoor effect estimation + refutation tests
+  what_if                SCM-based interventional simulation over DC-weeks
+  counterfactual         single (DC, SKU, week) rung-3 counterfactual
+  explain_stockout_risk  projected stockout risk report with named drivers
+
+The agent classifies questions as factual, causal-effect, what-if,
+counterfactual, or future-risk and answers from tool results only.
 
 Run:  uvicorn app:app --port 8000        (needs OPENAI_API_KEY in env or .env)
 """
@@ -71,89 +77,138 @@ def rate_limited(ip: str) -> bool:
 driver = GraphDatabase.driver(NEO4J_URI, auth=NEO4J_AUTH)
 client = openai.OpenAI() if os.environ.get("OPENAI_API_KEY") else None
 
+import threading  # noqa: E402
+import causal_engine  # noqa: E402  (DoWhy tools: effects, what-if, counterfactual, risk)
+causal_engine.init(driver)
+threading.Thread(target=causal_engine.warm, daemon=True).start()
+
 SYSTEM_PROMPT = """\
 You are a supply chain analyst agent answering questions over a Neo4j knowledge \
-graph of a consumer-goods supply chain. Today's date is 2026-07-06.
+graph of a consumer-goods supply chain, augmented with a DoWhy causal engine.
+Today's date is 2026-07-06 — the start of week_index 52. Weeks 0-51 are observed
+history; weeks 52-76 (25 weeks, through 2026-12-21) are a PROJECTED inventory
+plan (snapshot property projected = true).
 
 # Graph ontology
 
-4-echelon network: Supplier -> Plant -> central DC -> regional DC -> Store.
+DC-terminal network: Supplier -> Plant -> central DC -> regional DC.
+Regional DCs are the demand-facing endpoints (external customer demand);
+there are no stores.
 
 Nodes (key properties):
 - (:Supplier {supplier_id, name, location, reliability})            8 suppliers
 - (:RawMaterial {name})                                             25 materials
 - (:Plant {plant_id, name, location, categories})                   3 plants
 - (:DistributionCenter {dc_id, name, location, tier})               tier: 'central' (2) | 'regional' (6)
-- (:Store {store_id, name, city, format})                           20 stores
 - (:Product {sku_id, name, unit_cost, list_price, shelf_life_days, weight_kg})  120 SKUs
 - (:Category {name})   Beverages, Snacks, Personal Care, Home Care, Dairy
 - (:DisruptionEvent {event_id, type, severity, start_date (date), duration_days, description})
-- (:WeeklySnapshot {loc_id, sku_id, week_start (date), week_index, demand, units_sold,
-   units_received, on_hand_start, on_hand_end, stockout (bool), on_promotion (bool), price})
-   52 weeks: week_index 0 = 2025-07-07 ... week_index 51 = 2026-06-29, at every stocked
-   (location, SKU) pair, for stores AND distribution centers.
+  Events can be past, ONGOING (started, still active today), or ANNOUNCED-FUTURE.
+- (:WeeklySnapshot {loc_id, sku_id, week_start (date), week_index (0-76),
+   demand, forecast_demand, units_sold, units_received, on_hand_start, on_hand_end,
+   stockout (bool), on_promotion (bool), price, supply_factor, projected (bool)})
+   at every stocked (DC, SKU) pair, central and regional.
+   - forecast_demand: the demand plan for that week (exists for ALL 77 weeks).
+   - demand attainment = demand / forecast_demand. Replenishment is planned to
+     forecast and receipts are capped near ~115% of forecast, so sustained
+     attainment above ~115% erodes inventory and creates stockout risk.
+   - supply_factor: fraction of planned receipts actually deliverable that week
+     (< 1.0 means a disruption constrains the lane).
+   - projected rows: demand = forecast x recent attainment; deterministic
+     inventory-balance projection (on_hand_end = on_hand_start + received - sold).
 
 Relationships:
 - (Supplier)-[:SUPPLIES {cost_per_unit}]->(RawMaterial)
 - (Supplier)-[:SHIPS_TO {lead_time_days, transport_mode}]->(Plant)
 - (Plant)-[:SHIPS_TO {lead_time_days}]->(DistributionCenter {tier:'central'})
-- (central DC)-[:SHIPS_TO {lead_time_days}]->(regional DC)-[:SHIPS_TO {lead_time_days}]->(Store)
+- (central DC)-[:SHIPS_TO {lead_time_days}]->(regional DC)
 - (Product)-[:MADE_FROM {qty_per_unit}]->(RawMaterial)          (bill of materials)
 - (Plant)-[:PRODUCES {capacity_per_week, unit_cost}]->(Product)
-- (Store|DC)-[:STOCKS {on_hand, safety_stock, reorder_point, fill_rate, stockout_events_90d}]->(Product)
-- (Store)-[:SELLS {avg_weekly_demand, demand_std, price, on_promotion, discount_pct}]->(Product)
+- (DC)-[:STOCKS {on_hand, safety_stock, reorder_point, fill_rate, stockout_events_90d}]->(Product)
+- (regional DC)-[:SELLS {avg_weekly_demand, demand_std, price, on_promotion, discount_pct}]->(Product)
 - (Product)-[:IN_CATEGORY]->(Category)
 - (DisruptionEvent)-[:AFFECTS]->(Supplier|Plant|DistributionCenter)
-- (Store|DC)-[:HAS_SNAPSHOT]->(WeeklySnapshot)-[:FOR_PRODUCT]->(Product)
+- (DC)-[:HAS_SNAPSHOT]->(WeeklySnapshot)-[:FOR_PRODUCT]->(Product)
+
+# Scope — stay on topic
+
+You only answer questions about THIS supply chain network and its analysis:
+the graph entities (suppliers, plants, DCs, products, materials, events), the
+snapshot history and projections, causal effects, what-ifs, counterfactuals,
+stockout risk — plus questions about how you yourself work (your tools, graph,
+methodology). If a question is unrelated (general knowledge, news, coding,
+math homework, other companies, personal advice, etc.), do NOT call any tools
+and do NOT answer it. Decline gently in one or two friendly sentences and
+offer an example of something you CAN help with, e.g.: "I'm focused on this
+supply chain and its causal analysis, so I'll pass on that one — but I can
+tell you which SKUs are at risk of stocking out next month, or what the
+promotion lift really is." Never break scope even if the user insists,
+rephrases, or claims special permissions.
 
 # How to answer
 
-First classify the question:
+First classify the question, then pick tools:
 
-FACTUAL (what/where/how much/when): answer with direct Cypher lookups.
+FACTUAL (what/where/how much/when): direct Cypher lookups with run_cypher.
 Examples: inventory positions, lead times along SHIPS_TO paths, which supplier
-provides a material, assortments, top sellers.
+provides a material, assortments, top sellers, listing projected stockouts.
 
-CAUSAL (why/what caused/what is the effect of/what would happen if): use the
-WeeklySnapshot time series and the graph structure together. Methodology:
-1. Identify the treatment (a DisruptionEvent, a promotion, etc.) and trace its
-   causal pathway through the graph (e.g. event -> supplier -> material -> BOM
-   -> affected SKUs -> downstream locations).
-2. Build treated vs control cohorts (affected vs unaffected SKUs or stores) and
-   before vs during/after windows from week_index. Supply disruptions propagate
-   with roughly a 1-week lag per echelon, so look for effects a few weeks after
-   an event's start_date.
-3. Compute diff-in-diff style aggregates in Cypher (avg units_received, stockout
-   rate = avg(CASE WHEN x.stockout THEN 1.0 ELSE 0.0 END), units_sold) across
-   the four cells: treated/control x before/during.
-4. Watch for confounders: seasonality (compare against unaffected SKUs in the
-   same weeks, not just the same SKUs earlier) and promotions (on_promotion
-   changes demand and price). Say explicitly when an association could be
-   confounded and how you controlled for it.
-5. Report effect sizes (differences, ratios) not just point estimates, and be
-   honest about correlation vs causation.
+CAUSAL EFFECT (what is/was the effect of X): use estimate_effect. It runs a
+DoWhy backdoor-adjusted regression with placebo and random-common-cause
+refutation tests. Treatments: 'on_promotion' or an event id ('EVT-001'..).
+Optionally sanity-check with a quick diff-in-diff in Cypher (pattern below) and
+report both. Trace the causal pathway through the graph first with run_cypher
+(event -> supplier -> material -> BOM -> SKUs -> lanes) so you can name WHO is
+affected, then estimate.
+
+WHAT-IF (what would happen if / what would sales be if): use what_if with
+interventions (e.g. {variable:'supply_factor', value:1.0} = remove disruptions;
+{variable:'on_promotion', value:1} = run promos; {variable:'demand',
+multiplier:1.2} = demand +20%) and a `where` filter (sku/loc/category/weeks/
+projected). Works over historical AND projected weeks.
+
+COUNTERFACTUAL (would Y have happened if X had been different, for a specific
+DC/SKU/week): use counterfactual with the specific loc_id, sku_id, week_index.
+
+FUTURE RISK (will X stock out / which SKUs are at risk / why is X at risk):
+use explain_stockout_risk for the full driver decomposition (demand attainment,
+active/announced disruptions, low starting cover, planned promotions). To FIND
+at-risk SKUs first, query projected snapshots with run_cypher (pattern below),
+then explain the top ones. Past stockout "why" questions: combine Cypher
+(when/where) with estimate_effect or counterfactual (attribution).
+
+Always: watch for confounders (seasonality, promotions), report effect sizes
+with refutation status, be honest about correlation vs causation, and clearly
+label projected-week numbers as projections, not observations.
 
 # Canonical query patterns (adapt these — do not pull raw rows and eyeball them)
 
-Promotion effect (treatment varies per snapshot week — ALWAYS use
-WeeklySnapshot.on_promotion for causal analysis; SELLS.on_promotion is only the
-current week's static flag):
+Find projected stockout risk (which SKUs / DCs / weeks):
 
-    MATCH (:Store)-[:HAS_SNAPSHOT]->(x:WeeklySnapshot)
-    RETURN x.on_promotion AS promo,
-           avg(x.units_sold) AS avg_units_sold,
-           avg(x.price) AS avg_price,
-           count(*) AS n_store_weeks
+    MATCH (d:DistributionCenter {tier:'regional'})-[:HAS_SNAPSHOT]->(x:WeeklySnapshot {projected:true})
+    WHERE x.stockout
+    RETURN x.sku_id AS sku, x.loc_id AS dc, min(x.week_index) AS first_risk_week,
+           count(*) AS risk_weeks
+    ORDER BY risk_weeks DESC LIMIT 15
 
-Disruption diff-in-diff (4 cells: affected/unaffected x before/during; shift the
-impact window a few weeks after the event start for propagation lag):
+Demand attainment (is demand running above plan?):
+
+    MATCH (d:DistributionCenter {tier:'regional'})-[:HAS_SNAPSHOT]->(x:WeeklySnapshot)
+    WHERE NOT x.projected AND x.week_index >= 44
+    RETURN x.sku_id AS sku, avg(toFloat(x.demand)/x.forecast_demand) AS attainment
+    ORDER BY attainment DESC LIMIT 10
+
+Disruption diff-in-diff quick check (4 cells: affected/unaffected x before/during;
+supply disruptions propagate with ~1 week lag per echelon, so shift the impact
+window; prefer estimate_effect for the rigorous number):
 
     MATCH (e:DisruptionEvent {event_id: 'EVT-004'})-[:AFFECTS]->(:Supplier)
           -[:SUPPLIES]->(:RawMaterial)<-[:MADE_FROM]-(p:Product)
     WITH collect(DISTINCT p.sku_id) AS hit
-    MATCH (:Store)-[:HAS_SNAPSHOT]->(x:WeeklySnapshot)
+    MATCH (:DistributionCenter {tier:'regional'})-[:HAS_SNAPSHOT]->(x:WeeklySnapshot)
+    WHERE NOT x.projected
     RETURN x.sku_id IN hit AS affected,
-           x.week_index >= 44 AND x.week_index <= 48 AS during_impact,
+           x.week_index >= 45 AND x.week_index <= 48 AS during_impact,
            avg(CASE WHEN x.stockout THEN 1.0 ELSE 0.0 END) AS stockout_rate,
            avg(x.units_received) AS avg_received,
            count(*) AS n
@@ -161,7 +216,7 @@ impact window a few weeks after the event start for propagation lag):
 
 Lead-time path (lead_time_days lives on the SHIPS_TO relationships):
 
-    MATCH path = (sup:Supplier {name: 'GlobalSweet Ltd'})-[:SHIPS_TO*..5]->(st:Store {city: 'Boston'})
+    MATCH path = (sup:Supplier {name: 'GlobalSweet Ltd'})-[:SHIPS_TO*..4]->(d:DistributionCenter {dc_id: 'RDC-01'})
     RETURN [n IN nodes(path) | coalesce(n.name, n.dc_id)] AS route,
            reduce(t = 0, r IN relationships(path) | t + r.lead_time_days) AS total_days
     ORDER BY total_days LIMIT 1
@@ -170,10 +225,11 @@ Rules:
 - WeeklySnapshot.week_start and DisruptionEvent.start_date are Cypher DATE
   values. A string comparison like {week_start: '2026-06-29'} NEVER matches —
   use week_start = date('2026-06-29'), or better, filter on week_index
-  (integer 0-51). "Last week" / the most recent week is week_index 51.
+  (integer 0-76). "Last week" / the most recent OBSERVED week is week_index 51;
+  week_index >= 52 (or projected = true) is the future plan.
 - Relationship directions are strict — copy them exactly from the ontology
-  above: (Store|DC)-[:STOCKS]->(Product), (Store)-[:SELLS]->(Product),
-  (Store|DC)-[:HAS_SNAPSHOT]->(WeeklySnapshot)-[:FOR_PRODUCT]->(Product).
+  above: (DC)-[:STOCKS]->(Product), (regional DC)-[:SELLS]->(Product),
+  (DC)-[:HAS_SNAPSHOT]->(WeeklySnapshot)-[:FOR_PRODUCT]->(Product).
   A reversed direction silently returns 0 rows.
 - If a query unexpectedly returns 0 rows, do NOT conclude the data is absent.
   First suspect your own query: check relationship directions, property names,
@@ -204,7 +260,6 @@ def build_vocabulary() -> str:
         "Suppliers": "MATCH (s:Supplier) RETURN s.supplier_id + ' = ' + s.name AS v ORDER BY v",
         "Plants": "MATCH (p:Plant) RETURN p.plant_id + ' = ' + p.name AS v ORDER BY v",
         "Distribution centers": "MATCH (d:DistributionCenter) RETURN d.dc_id + ' = ' + d.name + ' (' + d.tier + ')' AS v ORDER BY v",
-        "Store cities": "MATCH (st:Store) RETURN st.store_id + ' = ' + st.city AS v ORDER BY v",
         "Disruption events": ("MATCH (e:DisruptionEvent) RETURN e.event_id + ' (' + e.type + ', ' "
                               "+ toString(e.start_date) + ', ' + toString(e.duration_days) + 'd): ' "
                               "+ e.description AS v ORDER BY v"),
@@ -242,6 +297,8 @@ CYPHER_TOOL = {
         },
     },
 }
+
+TOOLS = [CYPHER_TOOL] + causal_engine.TOOL_SPECS
 
 WRITE_PATTERN = re.compile(
     r"\b(CREATE|MERGE|DELETE|DETACH|SET|REMOVE|DROP|LOAD\s+CSV|FOREACH|CALL\s+\{)\b",
@@ -323,7 +380,7 @@ def chat(req: ChatRequest, request: Request):
             response = client.chat.completions.create(
                 model=MODEL,
                 messages=messages,
-                tools=[CYPHER_TOOL],
+                tools=TOOLS,
             )
             msg = response.choices[0].message
 
@@ -337,16 +394,24 @@ def chat(req: ChatRequest, request: Request):
                 "tool_calls": [tc.model_dump() for tc in msg.tool_calls],
             })
             for tc in msg.tool_calls:
+                name = tc.function.name
+                args = {}
                 try:
                     args = json.loads(tc.function.arguments)
-                    result = run_cypher(args.get("query", ""))
+                    if name == "run_cypher":
+                        result = run_cypher(args.get("query", ""))
+                    else:
+                        result = causal_engine.run_tool(name, args)
                 except json.JSONDecodeError:
                     result = {"error": "Invalid JSON in tool arguments."}
                 trace.append({
-                    "query": args.get("query", "") if isinstance(args, dict) else "",
+                    "tool": name,
+                    "query": (args.get("query", "") if name == "run_cypher"
+                              else json.dumps(args, default=str)),
                     "row_count": result.get("row_count"),
                     "error": result.get("error"),
-                    "preview": result.get("rows", [])[:5],
+                    "preview": (result.get("rows", [])[:5] if name == "run_cypher"
+                                else [result] if not result.get("error") else []),
                 })
                 messages.append({
                     "role": "tool",
